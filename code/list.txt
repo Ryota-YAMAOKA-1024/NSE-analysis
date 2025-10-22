@@ -1,0 +1,16 @@
+# コメント行や空行は無視されます / 最初のDIR=行にデータディレクトリを指定し、TEMP=で温度を指定してください
+DIR=/Users/yamaokaryota/Library/CloudStorage/GoogleDrive-yamaoka-ryota-1024@g.ecc.u-tokyo.ac.jp/.shortcut-targets-by-id/1EKALfynkxJ3ivgOkvVlpgLabdSA2LAp-/Yamaoka_2025cycle6/
+TEMP=2.6K
+scan_106919.txt
+scan_106985.txt
+scan_107051.txt
+scan_107117.txt
+scan_107183.txt
+scan_107249.txt
+scan_107315.txt
+scan_107381.txt
+scan_107447.txt
+scan_107513.txt
+scan_107579.txt
+scan_107645.txt
+scan_107711.txt

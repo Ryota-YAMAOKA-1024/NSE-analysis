@@ -3,7 +3,7 @@ import csv
 import math
 import re
 from pathlib import Path
-from typing import Dict, Iterable, List, Tuple
+from typing import Dict, Iterable, List, Tuple, Union
 
 import matplotlib
 matplotlib.use("Agg")
@@ -14,6 +14,7 @@ import numpy as np
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_INPUT = BASE_DIR.parent / "fit" / "fit_results.csv"
 DEFAULT_OUTPUT = BASE_DIR.parent.parent / "2K" / "figure"
+DEFAULT_LIST_FILE = BASE_DIR / "list.txt"
 
 NOTE_PATTERN = re.compile(r"PCC\s*([-+]?\d*\.?\d+)", re.IGNORECASE)
 
@@ -40,18 +41,30 @@ def _parse_pcc_value(note: str) -> float:
     return _safe_float(filtered)
 
 
-def load_fit_results(csv_path: Path) -> List[Dict[str, float]]:
+RowDict = Dict[str, Union[float, str]]
+
+
+def load_fit_results(csv_path: Path) -> List[RowDict]:
     """Load fit results and attach PCC numeric values."""
     with csv_path.open("r", encoding="utf-8") as fp:
         reader = csv.DictReader(fp)
         rows = list(reader)
 
-    results: List[Dict[str, float]] = []
+    results: List[RowDict] = []
     for row in rows:
         pcc_value = _parse_pcc_value(row.get("note_info", ""))
-        enriched_row: Dict[str, float] = {
+        temp_raw = row.get("temperature", "")
+        if isinstance(temp_raw, str):
+            temp_clean = temp_raw.strip()
+        elif temp_raw is None:
+            temp_clean = ""
+        else:
+            temp_clean = str(temp_raw).strip()
+
+        enriched_row: RowDict = {
             "note_info": row.get("note_info", ""),
             "pcc_value": pcc_value,
+            "temperature": temp_clean,
         }
 
         for key in (
@@ -75,7 +88,7 @@ def load_fit_results(csv_path: Path) -> List[Dict[str, float]]:
 
 
 def _prepare_series(
-    data: Iterable[Dict[str, float]], y_key: str, y_err_key: str
+    data: Iterable[RowDict], y_key: str, y_err_key: str
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Create x, y, yerr arrays filtered for valid PCC values."""
     xs: List[float] = []
@@ -96,15 +109,59 @@ def _prepare_series(
 
     return np.array(xs, dtype=float), np.array(ys, dtype=float), np.array(yerrs, dtype=float)
 
+def _extract_temperature_label(data: Iterable[RowDict]) -> str:
+    """データから最初の温度ラベルを取得する"""
+    for row in data:
+        temp = row.get("temperature")
+        if isinstance(temp, str):
+            temp = temp.strip()
+            if temp:
+                return temp
+    return ""
+
+
+def _read_temperature_from_list(list_path: Path) -> str:
+    """list.txt から TEMP= を読み取る"""
+    if not list_path.exists():
+        return ""
+    try:
+        with list_path.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+                if stripped.lower().startswith("temp="):
+                    return stripped.split("=", 1)[1].strip()
+    except OSError:
+        return ""
+    return ""
+
+
+def _format_temperature_label(label: str) -> str:
+    """温度表記を '2.6 K' のような形式に整える"""
+    if not label:
+        return ""
+    raw = label.strip()
+    if not raw:
+        return ""
+    raw = raw.replace("℃", "C")  # unexpected char fallback
+    if raw[-1].lower() == "k":
+        value = raw[:-1].strip()
+        if value:
+            return f"{value} K"
+        return "K"
+    # if already contains ' K' or unit inside, keep
+    return raw
 
 def plot_series(
-    data: List[Dict[str, float]],
+    data: List[RowDict],
     y_key: str,
     y_err_key: str,
     title: str,
     ylabel: str,
     filename: str,
     output_dir: Path,
+    temperature_label: str = "",
 ) -> None:
     """Create and save a single PCC summary plot."""
     xs, ys, yerrs = _prepare_series(data, y_key, y_err_key)
@@ -129,7 +186,10 @@ def plot_series(
     )
     ax.set_xlabel("PCC (A)")
     ax.set_ylabel(ylabel)
-    ax.set_title(title)
+    display_title = title
+    if temperature_label:
+        display_title = f"{title} at {temperature_label}"
+    ax.set_title(display_title)
     ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.6)
     ax.legend()
     plt.tight_layout()
@@ -172,35 +232,40 @@ def main() -> None:
         (
             "A",
             "A_error",
-            "Amplitude A(counts/30sec) vs PCC(A) at 2.6K",
+            "Amplitude A(counts/30sec) vs PCC(A)",
             "Amplitude A (counts/30sec)",
             "Amplitude_vs_PCC.png",
         ),
         (
             "offset",
             "offset_error",
-            "mean B(counts/30sec) vs PCC(A) at 2.6K",
+            "mean B(counts/30sec) vs PCC(A)",
             "Mean B (counts/30sec)",
             "MeanB_vs_PCC.png",
         ),
         (
             "Nup_mean",
             "Nup_error",
-            "Nup(counts/30sec) vs PCC(A) at 2.6K",
+            "Nup(counts/30sec) vs PCC(A)",
             "Nup (counts/30sec)",
             "Nup_vs_PCC.png",
         ),
         (
             "Ndown_mean",
             "Ndown_error",
-            "Ndown(counts/30sec) vs PCC(A) at 2.6K",
+            "Ndown(counts/30sec) vs PCC(A)",
             "Ndown (counts/30sec)",
             "Ndown_vs_PCC.png",
         ),
     ]
 
+    temperature_label = _extract_temperature_label(data)
+    if not temperature_label:
+        temperature_label = _read_temperature_from_list(DEFAULT_LIST_FILE)
+    temperature_label = _format_temperature_label(temperature_label)
+
     for y_key, y_err, title, ylabel, filename in plots:
-        plot_series(data, y_key, y_err, title, ylabel, filename, output_dir)
+        plot_series(data, y_key, y_err, title, ylabel, filename, output_dir, temperature_label)
 
 
 if __name__ == "__main__":

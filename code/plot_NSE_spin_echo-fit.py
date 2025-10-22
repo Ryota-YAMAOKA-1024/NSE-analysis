@@ -8,6 +8,7 @@ import argparse  # コマンドライン引数解析のためのライブラリ
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))  # スクリプトのディレクトリ
 FIGURE_DIR = os.path.normpath(os.path.join(BASE_DIR, "..", "figure"))  # 画像出力先
 FIT_DIR = os.path.normpath(os.path.join(BASE_DIR, "..", "fit"))  # フィット結果出力先
+DEFAULT_LIST_FILE = os.path.join(BASE_DIR, "list.txt")  # デフォルトのファイルリスト
 
 def fit_func(x, A, B, C, D):
     """フィッティング用の正弦関数を定義"""
@@ -68,6 +69,75 @@ def load_nse_data(file_path):
 
     return headers, rows
 
+
+def _format_temperature_label(label):
+    """温度の表記を '2.6 K' の形式に整える"""
+    if not label:
+        return ""
+    raw = str(label).strip()
+    if not raw:
+        return ""
+    raw = raw.replace("℃", "C")
+    if raw[-1].lower() == "k":
+        value = raw[:-1].strip()
+        if value:
+            return f"{value} K"
+        return "K"
+    return raw
+
+def load_filename_list(list_path):
+    """list.txt からデータディレクトリ・温度・処理対象のファイル名を読み込む"""
+    resolved_path = os.path.expanduser(list_path)
+    if not os.path.isabs(resolved_path):
+        resolved_path = os.path.join(BASE_DIR, resolved_path)
+
+    if not os.path.exists(resolved_path):
+        raise FileNotFoundError(f"リストファイルが存在しません: {resolved_path}")
+
+    data_dir = None
+    temperature = None
+    filenames = []
+    with open(resolved_path, 'r', encoding='utf-8') as f:
+        for line in f:
+            entry = line.strip()
+            if not entry or entry.startswith("#"):
+                continue
+            if entry.lower().startswith("dir="):
+                candidate = entry.split("=", 1)[1].strip()
+                if candidate:
+                    candidate = os.path.expanduser(candidate)
+                    if not os.path.isabs(candidate):
+                        candidate = os.path.join(BASE_DIR, candidate)
+                    data_dir = candidate
+                continue
+            if entry.lower().startswith("temp="):
+                temp_value = entry.split("=", 1)[1].strip()
+                if temp_value:
+                    temperature = temp_value
+                continue
+            if data_dir is None and entry.endswith(("/", "\\")):
+                candidate = os.path.expanduser(entry)
+                if not os.path.isabs(candidate):
+                    candidate = os.path.join(BASE_DIR, candidate)
+                data_dir = candidate
+                continue
+            filenames.append(entry)
+
+    if data_dir is None:
+        raise ValueError(
+            f"データディレクトリが指定されていません: {resolved_path} (行頭に 'DIR=' で指定してください)"
+        )
+    if temperature is None:
+        raise ValueError(
+            f"温度情報が指定されていません: {resolved_path} (行頭に 'TEMP=' で指定してください)"
+        )
+    if not filenames:
+        raise ValueError(f"リストファイルが空です: {resolved_path}")
+
+    temperature = _format_temperature_label(temperature)
+
+    return data_dir, temperature, filenames
+
 def _extract_role_arrays(rows, role_name):
     """role列でフィルタリングし、currentとcountsの配列を返す"""
     filtered = [row for row in rows if row.get("role") == role_name]
@@ -76,7 +146,7 @@ def _extract_role_arrays(rows, role_name):
     mask = (~np.isnan(currents)) & (~np.isnan(counts))
     return currents[mask], counts[mask]
 
-def process_single_file(file_path, save_plot=True):
+def process_single_file(file_path, save_plot=True, temperature=None):
     """単一ファイルを処理する関数"""
     print(f"Processing {os.path.basename(file_path)}...")  # 処理中のファイル名を表示
 
@@ -118,6 +188,7 @@ def process_single_file(file_path, save_plot=True):
         result = {
             'filename': os.path.basename(file_path),  # ファイル名を格納
             'note_info': note_info,  # 測定条件情報を格納
+            'temperature': temperature,  # 測定温度を記録
             'A': popt[0],  # フィッティング結果の振幅Aを格納
             'A_error': errors[0],  # 振幅Aの標準誤差を格納
             'f': popt[1],  # フィッティング結果の周波数fを格納
@@ -146,7 +217,10 @@ def process_single_file(file_path, save_plot=True):
             ax.plot(echo_current, fit_func(echo_current, *popt), label="Fit")  # フィッティング曲線をプロット
             ax.set_xlabel(" current (symcoil2) (A)")  # x軸ラベルを設定
             ax.set_ylabel(" Intensity")  # y軸ラベルを設定
-            ax.set_title(f"{note_info}")  # グラフタイトルを測定条件に設定
+            if temperature:
+                ax.set_title(f"{note_info} at {temperature}")  # 温度をタイトルに追加
+            else:
+                ax.set_title(f"{note_info}")  # グラフタイトルを測定条件に設定
             ax.grid(True)  # グリッドを表示
             ax.set_ylim(30, 300)  # y軸の範囲を30-300に設定
             plt.savefig(os.path.join(FIGURE_DIR, f"{note_info}.png"))  # figureフォルダ内にグラフをPNGファイルとして保存
@@ -166,7 +240,7 @@ def process_single_file(file_path, save_plot=True):
         print(f"Error processing {os.path.basename(file_path)}: {e}")  # エラーが発生した場合のメッセージを表示
         return None  # エラー時はNoneを返す
 
-def process_multiple_files(dir_path, filenames, save_plots=True):
+def process_multiple_files(dir_path, filenames, save_plots=True, temperature=None):
     """複数ファイルを処理する関数"""
     results = []  # 結果を格納するリストを初期化
 
@@ -178,7 +252,7 @@ def process_multiple_files(dir_path, filenames, save_plots=True):
             print(f"File not found: {filename}")  # ファイルが見つからないメッセージを表示
             continue  # 次のファイルにスキップ
 
-        result = process_single_file(file_path, save_plot=save_plots)  # 単一ファイル処理関数を呼び出し
+        result = process_single_file(file_path, save_plot=save_plots, temperature=temperature)  # 単一ファイル処理関数を呼び出し
         if result:  # 処理が成功した場合
             results.append(result)  # 結果をリストに追加
 
@@ -202,22 +276,24 @@ if __name__ == "__main__":
     # コマンドライン引数の設定
     parser = argparse.ArgumentParser(description='NSEデータのフィッティングとプロット')  # 引数解析器を作成
     parser.add_argument('--mode', choices=['single', 'multiple'], default='multiple',  # 処理モードを選択（デフォルトは複数ファイル）
-                       help='処理モード: single (単一ファイル) または multiple (複数ファイル)')
+                        help='処理モード: single (単一ファイル) または multiple (複数ファイル)')
     parser.add_argument('--file', type=str, default='scan_106919.txt',  # 単一ファイル処理時のファイル名を指定
-                       help='単一ファイル処理時のファイル名')
+                        help='単一ファイル処理時のファイル名')
     parser.add_argument('--no-plot', action='store_true',  # プロット保存を無効にするフラグ
-                       help='プロットを保存しない')
-    parser.add_argument('--dir', type=str,  # データファイルのディレクトリパスを指定
-                       default="/Users/yamaokaryota/Library/CloudStorage/GoogleDrive-yamaoka-ryota-1024@g.ecc.u-tokyo.ac.jp/.shortcut-targets-by-id/1EKALfynkxJ3ivgOkvVlpgLabdSA2LAp-/Yamaoka_2025cycle6/",
-                       help='データファイルのディレクトリパス')
+                        help='プロットを保存しない')
+    parser.add_argument('--list-file', type=str, default=DEFAULT_LIST_FILE,
+                        help=f'データディレクトリとファイル名を列挙したファイル (デフォルト: {DEFAULT_LIST_FILE})')
 
     args = parser.parse_args()  # コマンドライン引数を解析
-
-    dir_path = args.dir  # ディレクトリパスを取得
     save_plots = not args.no_plot  # プロット保存フラグを設定
 
+    try:
+        dir_path, temperature, filenames_from_list = load_filename_list(args.list_file)
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"ファイルリストの読み込みに失敗しました: {exc}")
+        exit(1)
+
     if args.mode == 'single':  # 単一ファイル処理モードの場合
-        # 単一ファイル処理
         filename = args.file  # ファイル名を取得
         file_path = os.path.join(dir_path, filename)  # 完全なファイルパスを作成
 
@@ -225,29 +301,12 @@ if __name__ == "__main__":
             print(f"File not found: {file_path}")  # エラーメッセージを表示
             exit(1)  # プログラムを終了
 
-        result = process_single_file(file_path, save_plot=save_plots)  # 単一ファイル処理を実行
+        result = process_single_file(file_path, save_plot=save_plots, temperature=temperature)  # 単一ファイル処理を実行
         if result:  # 処理が成功した場合
             print("Single file processing completed successfully!")  # 成功メッセージを表示
         else:
             print("Single file processing failed!")  # 失敗メッセージを表示
 
     else:  # 複数ファイル処理モードの場合
-        # 複数ファイル処理
-        filenames = [  # 処理対象のファイル名リストを定義
-            "scan_106919.txt",
-            "scan_106985.txt",
-            "scan_107051.txt",
-            "scan_107117.txt",
-            "scan_107183.txt",
-            "scan_107249.txt",
-            "scan_107315.txt",
-            "scan_107381.txt",
-            "scan_107447.txt",
-            "scan_107513.txt",
-            "scan_107579.txt",
-            "scan_107645.txt",
-            "scan_107711.txt"
-        ]
-
-        results = process_multiple_files(dir_path, filenames, save_plots=save_plots)  # 複数ファイル処理を実行
+        results = process_multiple_files(dir_path, filenames_from_list, save_plots=save_plots, temperature=temperature)  # 複数ファイル処理を実行
         print(f"Multiple files processing completed! Processed {len(results)} files.")  # 処理完了メッセージを表示
