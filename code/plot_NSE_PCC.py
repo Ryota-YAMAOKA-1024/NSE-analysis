@@ -13,7 +13,7 @@ import numpy as np
 # ベースディレクトリと入出力先の定義
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_INPUT = BASE_DIR.parent / "fit" / "fit_results.csv"
-DEFAULT_OUTPUT = BASE_DIR.parent.parent / "2K" / "figure"
+DEFAULT_OUTPUT = BASE_DIR.parent / "figure"
 DEFAULT_LIST_FILE = BASE_DIR / "list.txt"
 
 NOTE_PATTERN = re.compile(r"PCC\s*([-+]?\d*\.?\d+)", re.IGNORECASE)
@@ -153,6 +153,28 @@ def _format_temperature_label(label: str) -> str:
     # if already contains ' K' or unit inside, keep
     return raw
 
+
+def _read_meastime_from_list(list_path: Path) -> float:
+    """list.txt から meastime= を読み取り、floatとして返す。見つからない場合は math.nan。"""
+    if not list_path.exists():
+        return math.nan
+    try:
+        with list_path.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+                if stripped.lower().startswith("meastime"):
+                    value = stripped.split("=", 1)[1].strip()
+                    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+                        value = value[1:-1].strip()
+                    parsed = _safe_float(value)
+                    return parsed
+    except OSError:
+        return math.nan
+    return math.nan
+
+
 def plot_series(
     data: List[RowDict],
     y_key: str,
@@ -192,6 +214,10 @@ def plot_series(
     ax.set_title(display_title)
     ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.6)
     ax.legend()
+
+    #if y_key == "A":
+    #    ax.set_ylim(bottom=0)
+
     plt.tight_layout()
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -228,33 +254,42 @@ def main() -> None:
 
     data = load_fit_results(input_path)
 
+    meastime_value = _read_meastime_from_list(DEFAULT_LIST_FILE)
+    if math.isnan(meastime_value) or meastime_value <= 0:
+        meastime_value = 30.0
+    if abs(meastime_value - round(meastime_value)) < 1e-6:
+        meastime_str = str(int(round(meastime_value)))
+    else:
+        meastime_str = f"{meastime_value:g}"
+    unit_suffix = f"{meastime_str}sec"
+
     plots = [
         (
             "A",
             "A_error",
-            "Amplitude A(counts/30sec) vs PCC(A)",
-            "Amplitude A (counts/30sec)",
+            f"Amplitude A(counts/{unit_suffix}) vs PCC(A)",
+            f"Amplitude A (counts/{unit_suffix})",
             "Amplitude_vs_PCC.png",
         ),
         (
             "offset",
             "offset_error",
-            "mean B(counts/30sec) vs PCC(A)",
-            "Mean B (counts/30sec)",
+            f"mean B(counts/{unit_suffix}) vs PCC(A)",
+            f"Mean B (counts/{unit_suffix})",
             "MeanB_vs_PCC.png",
         ),
         (
             "Nup_mean",
             "Nup_error",
-            "Nup(counts/30sec) vs PCC(A)",
-            "Nup (counts/30sec)",
+            f"Nup(counts/{unit_suffix}) vs PCC(A)",
+            f"Nup (counts/{unit_suffix})",
             "Nup_vs_PCC.png",
         ),
         (
             "Ndown_mean",
             "Ndown_error",
-            "Ndown(counts/30sec) vs PCC(A)",
-            "Ndown (counts/30sec)",
+            f"Ndown(counts/{unit_suffix}) vs PCC(A)",
+            f"Ndown (counts/{unit_suffix})",
             "Ndown_vs_PCC.png",
         ),
     ]

@@ -1,4 +1,5 @@
 import os  # ファイルパス操作のためのライブラリ
+import math  # 数値計算のためのライブラリ
 import matplotlib.pyplot as plt  # グラフ描画のためのライブラリ
 import numpy as np  # 数値計算のためのライブラリ
 from scipy.optimize import curve_fit  # 曲線フィッティングのためのライブラリ
@@ -9,6 +10,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))  # スクリプトのデ�
 FIGURE_DIR = os.path.normpath(os.path.join(BASE_DIR, "..", "figure"))  # 画像出力先
 FIT_DIR = os.path.normpath(os.path.join(BASE_DIR, "..", "fit"))  # フィット結果出力先
 DEFAULT_LIST_FILE = os.path.join(BASE_DIR, "list.txt")  # デフォルトのファイルリスト
+COUNTS_UNIT_SUFFIX = "30sec"
 
 def fit_func(x, A, B, C, D):
     """フィッティング用の正弦関数を定義"""
@@ -138,6 +140,29 @@ def load_filename_list(list_path):
 
     return data_dir, temperature, filenames
 
+
+def _read_meastime_from_list(list_path):
+    """list.txt から meastime= を読み取り、floatとして返す。見つからない場合は math.nan。"""
+    resolved_path = os.path.expanduser(list_path)
+    if not os.path.isabs(resolved_path):
+        resolved_path = os.path.join(BASE_DIR, resolved_path)
+    if not os.path.exists(resolved_path):
+        return math.nan
+    try:
+        with open(resolved_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                entry = line.strip()
+                if not entry or entry.startswith("#"):
+                    continue
+                if entry.lower().startswith("meastime"):
+                    value = entry.split("=", 1)[1].strip()
+                    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+                        value = value[1:-1].strip()
+                    return _safe_float(value)
+    except OSError:
+        return math.nan
+    return math.nan
+
 def _extract_role_arrays(rows, role_name):
     """role列でフィルタリングし、currentとcountsの配列を返す"""
     filtered = [row for row in rows if row.get("role") == role_name]
@@ -181,7 +206,7 @@ def process_single_file(file_path, save_plot=True, temperature=None):
         up_errors = np.sqrt(up_counts)
 
         # フィッティング実行
-        popt, pcov = curve_fit(fit_func, echo_current, echo_counts, p0=[76,45, 0, 161])  # 正弦関数でフィッティング実行
+        popt, pcov = curve_fit(fit_func, echo_current, echo_counts, p0=[70, 0.5, 0, 700], maxfev=10000)  # 正弦関数でフィッティング実行
         errors = np.sqrt(np.diag(pcov))  # フィッティングパラメータの標準誤差を計算
 
         # 結果を辞書に格納
@@ -209,20 +234,41 @@ def process_single_file(file_path, save_plot=True, temperature=None):
                 os.makedirs(FIGURE_DIR, exist_ok=True)  # figureフォルダを作成
 
             fig, ax = plt.subplots()  # 新しい図と軸を作成
-            ax.errorbar(echo_current, echo_counts, yerr=echo_errors, fmt="o", linewidth=1, label="echo")  # echoデータをエラーバー付きでプロット
+            ax.errorbar(echo_current, echo_counts, yerr=echo_errors, fmt="o", linewidth=1, label="experimental data")  # 測定データをエラーバー付きでプロット
             if up_current.size:
-                ax.errorbar(up_current, up_counts, yerr=up_errors, fmt="o", linewidth=1, label="up", color="red")  # upデータを赤色でエラーバー付きプロット
+                ax.errorbar(up_current, up_counts, yerr=up_errors, fmt="o", linewidth=1, label="__nolegend__", color="red")  # upデータを赤色でエラーバー付きプロット
             if down_current.size:
-                ax.errorbar(down_current, down_counts, yerr=down_errors, fmt="o", linewidth=1, label="down", color="blue")  # downデータを青色でエラーバー付きプロット
-            ax.plot(echo_current, fit_func(echo_current, *popt), label="Fit")  # フィッティング曲線をプロット
+                ax.errorbar(down_current, down_counts, yerr=down_errors, fmt="o", linewidth=1, label="__nolegend__", color="blue")  # downデータを青色でエラーバー付きプロット
+            fit_x_min = float(np.min(echo_current))
+            fit_x_max = float(np.max(echo_current))
+            if np.isclose(fit_x_min, fit_x_max):
+                fit_x = np.array([fit_x_min])
+            else:
+                fit_x = np.linspace(fit_x_min, fit_x_max, 400)  # 高密度にサンプリングして滑らかな曲線にする
+            ax.plot(fit_x, fit_func(fit_x, *popt), label="Fit")  # フィット結果を滑らかな正弦曲線として描画
             ax.set_xlabel(" current (symcoil2) (A)")  # x軸ラベルを設定
-            ax.set_ylabel(" Intensity")  # y軸ラベルを設定
+            ax.set_ylabel(f"Intensity (counts/{COUNTS_UNIT_SUFFIX})")  # y軸ラベルを設定
             if temperature:
                 ax.set_title(f"{note_info} at {temperature}")  # 温度をタイトルに追加
             else:
                 ax.set_title(f"{note_info}")  # グラフタイトルを測定条件に設定
             ax.grid(True)  # グリッドを表示
-            ax.set_ylim(30, 300)  # y軸の範囲を30-300に設定
+            ax.legend()
+            y_datasets = [echo_counts]
+            if up_counts.size:
+                y_datasets.append(up_counts)
+            if down_counts.size:
+                y_datasets.append(down_counts)
+            combined_counts = np.concatenate(y_datasets)
+            y_min, y_max = float(np.min(combined_counts)), float(np.max(combined_counts))
+            span = y_max - y_min
+            padding = max(span * 0.1, 5.0)
+            lower = max(0.0, y_min - padding)
+            upper = y_max + padding
+            if np.isclose(lower, upper):
+                upper = lower + 1.0
+            #ax.set_ylim(lower, upper)  # データに応じてy軸範囲を調整
+            ax.set_ylim(150, 1050)  # データに応じてy軸範囲を調整
             plt.savefig(os.path.join(FIGURE_DIR, f"{note_info}.png"))  # figureフォルダ内にグラフをPNGファイルとして保存
             plt.close()  # メモリ節約のため図を閉じる
 
@@ -292,6 +338,14 @@ if __name__ == "__main__":
     except (FileNotFoundError, ValueError) as exc:
         print(f"ファイルリストの読み込みに失敗しました: {exc}")
         exit(1)
+
+    meastime_value = _read_meastime_from_list(args.list_file)
+    if math.isnan(meastime_value) or meastime_value <= 0:
+        meastime_value = 30.0
+    if abs(meastime_value - round(meastime_value)) < 1e-6:
+        COUNTS_UNIT_SUFFIX = f"{int(round(meastime_value))}sec"
+    else:
+        COUNTS_UNIT_SUFFIX = f"{meastime_value:g}sec"
 
     if args.mode == 'single':  # 単一ファイル処理モードの場合
         filename = args.file  # ファイル名を取得
