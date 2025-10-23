@@ -1,5 +1,5 @@
 # コメント行や空行は無視されます / 最初のDIR=行にデータディレクトリを指定し、TEMP=で温度を指定してください
-DIR=/Users/yamaokaryota/Library/CloudStorage/GoogleDrive-yamaoka-ryota-1024@g.ecc.u-tokyo.ac.jp/.shortcut-targets-by-id/1EKALfynkxJ3ivgOkvVlpgLabdSA2LAp-/Yamaoka_2025cycle6/T2K/
+DIR=your path(DO NOT use quotation marks '')
 TEMP=2.6K
 meastime=120
 scan_110226.txt
