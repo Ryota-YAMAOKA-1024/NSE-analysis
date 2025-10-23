@@ -1,6 +1,6 @@
-# NSE Analysis Toolkit (2 K Set)
+# NSE Analysis Toolkit
 
-このディレクトリには CrNb₄Se₈ の NSE 実験データを解析・可視化するためのスクリプト一式がまとまっています。ファイル名に「2K」と付いていますが、`code/list.txt` に記載する温度や測定条件を切り替えることで別温度のデータにも利用できます。
+このディレクトリには CrNb₄Se₈ の NSE 実験データを解析・可視化するためのスクリプト一式がまとまっています。`code/list.txt` に記載する温度や測定条件を切り替えることで任意の測定温度に対応できます。
 
 - `code/` — 解析スクリプトと設定ファイル (`list.txt`)
 - `fit/` — フィット結果 (`plot_NSE_spin_echo-fit.py` が自動生成)
